@@ -49,7 +49,7 @@ def _choose_action(task_id: str, step_count: int) -> Dict[str, Any]:
 
 
 def _llm_choose_action(
-    client: OpenAI,
+    client: Any,
     model_name: str,
     task_id: str,
     step_count: int,
@@ -96,45 +96,49 @@ def _llm_choose_action(
 
 def run_task(
     env_base: str,
-    llm_client: OpenAI,
+    llm_client: Any,
     model_name: str,
     task_id: str,
     seed: int,
     timeout_s: float,
 ) -> float:
     print(f"[START] task_id={task_id} seed={seed}")
-    r = requests.post(
-        f"{env_base}/reset",
-        json={"task_id": task_id, "seed": seed},
-        timeout=timeout_s,
-    )
-    r.raise_for_status()
-    observation = r.json()
-    done = False
-    step = 0
-    final_score = 0.0
-    while not done:
-        step += 1
-        st = requests.get(f"{env_base}/state", timeout=timeout_s)
-        st.raise_for_status()
-        state_payload = st.json()
-        action = _llm_choose_action(llm_client, model_name, task_id, step, observation, state_payload)
-        resp = requests.post(f"{env_base}/step", json=action, timeout=timeout_s)
-        resp.raise_for_status()
-        payload = resp.json()
-        reward = payload["reward"]
-        done = bool(payload["done"])
-        final_score = float(reward["score"])
-        observation = payload.get("observation", observation)
-        st = requests.get(f"{env_base}/state", timeout=timeout_s)
-        st.raise_for_status()
-        prog = st.json().get("progress_ratio", None)
-        print(
-            f"[STEP] step={step} action={action['action_type']} "
-            f"score={final_score:.4f} progress={prog} done={str(done).lower()}"
+    try:
+        r = requests.post(
+            f"{env_base}/reset",
+            json={"task_id": task_id, "seed": seed},
+            timeout=timeout_s,
         )
-    print(f"[END] task_id={task_id} final_score={final_score:.4f}")
-    return final_score
+        r.raise_for_status()
+        observation = r.json()
+        done = False
+        step = 0
+        final_score = 0.0
+        while not done:
+            step += 1
+            st = requests.get(f"{env_base}/state", timeout=timeout_s)
+            st.raise_for_status()
+            state_payload = st.json()
+            action = _llm_choose_action(llm_client, model_name, task_id, step, observation, state_payload)
+            resp = requests.post(f"{env_base}/step", json=action, timeout=timeout_s)
+            resp.raise_for_status()
+            payload = resp.json()
+            reward = payload["reward"]
+            done = bool(payload["done"])
+            final_score = float(reward["score"])
+            observation = payload.get("observation", observation)
+            st = requests.get(f"{env_base}/state", timeout=timeout_s)
+            st.raise_for_status()
+            prog = st.json().get("progress_ratio", None)
+            print(
+                f"[STEP] step={step} action={action['action_type']} "
+                f"score={final_score:.4f} progress={prog} done={str(done).lower()}"
+            )
+        print(f"[END] task_id={task_id} final_score={final_score:.4f}")
+        return final_score
+    except Exception as e:
+        print(f"[ERROR] Exception during task_id={task_id}: {e}")
+        return 0.0
 
 
 def main() -> int:
@@ -160,15 +164,17 @@ def main() -> int:
     env_base = args.env_base.rstrip("/")
 
     api_base_url = os.getenv("API_BASE_URL", "").strip()
-    model_name = os.getenv("MODEL_NAME", "").strip()
+    model_name = os.getenv("MODEL_NAME", "fallback-model").strip()
     api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("HF_TOKEN", "").strip()
-    if not api_base_url:
-        raise RuntimeError("Missing required env var: API_BASE_URL")
-    if not model_name:
-        raise RuntimeError("Missing required env var: MODEL_NAME")
-    if not api_key:
-        raise RuntimeError("Missing required env var: OPENAI_API_KEY or HF_TOKEN")
-    llm_client = OpenAI(base_url=api_base_url, api_key=api_key)
+    
+    llm_client = None
+    if api_base_url and model_name and api_key:
+        try:
+            llm_client = OpenAI(base_url=api_base_url, api_key=api_key)
+        except Exception as e:
+            print(f"[WARNING] Failed to initialize OpenAI client: {e}")
+    else:
+        print("[WARNING] Missing LLM env vars. Using fallback deterministic policy.")
 
     scores: Dict[str, float] = {}
     for t in ["task_easy", "task_medium", "task_hard"]:
