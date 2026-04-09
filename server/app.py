@@ -895,7 +895,7 @@ def ui_action(req: CustomActionRequest) -> Dict[str, Any]:
     if action_type == "submit":
         custom_state["done"] = True
         errors = _custom_error_report(before, custom_state["schema"])
-        score = max(0.0, min(1.0, 1.0 - (len(errors) / 10.0)))
+        score = max(0.001, min(0.999, 1.0 - (len(errors) / 10.0)))
         return {"done": True, "score": round(score, 4), "message": "Submitted custom dataset.", "errors_remaining": errors}
 
     before_rows = len(before)

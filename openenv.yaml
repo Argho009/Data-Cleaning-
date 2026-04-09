@@ -79,7 +79,7 @@ state_space:
     errors_initial: { type: integer }
     progress_ratio: { type: number, minimum: 0.0, maximum: 1.0 }
 
-reward_range: [0.0, 1.0]
+reward_range: [0.001, 0.999]
 
 reward_components:
   - name: intermediate_signal

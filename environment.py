@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from tasks import TaskBundle, build_task, detect_errors, grade_task
 
@@ -45,6 +45,12 @@ class Reward(BaseModel):
     breakdown: Dict[str, float]
     message: str
     done: bool
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def clamp_score(cls, v: float) -> float:
+        """Enforce strict (0, 1) bounds required by OpenEnv validator."""
+        return float(max(0.001, min(0.999, v)))
 
 
 class EnvState(BaseModel):
