@@ -164,10 +164,11 @@ def run_task(
             observation = payload.get("observation", observation)
             st = requests.get(f"{env_base}/state", timeout=timeout_s)
             st.raise_for_status()
-            prog = st.json().get("progress_ratio", None)
+            prog_raw = st.json().get("progress_ratio", 0.001)
+            prog = _clamp_score(float(prog_raw)) if prog_raw is not None else 0.001
             print(
                 f"[STEP] step={step} action={action['action_type']} "
-                f"score={final_score:.4f} progress={prog} done={str(done).lower()}"
+                f"score={final_score:.4f} progress={prog:.4f} done={str(done).lower()}"
             )
         print(f"[END] task_id={task_id} final_score={final_score:.4f}")
         return final_score
