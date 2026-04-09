@@ -295,7 +295,8 @@ def grade_task(task_id: str, current: pd.DataFrame, bundle: TaskBundle) -> Dict[
         dedup_target = len(bundle.expected_df)
         dedup_diff = abs(len(current.drop_duplicates(subset=["sale_id", "sale_date", "amount", "product"])) - dedup_target)
         dedup_score = max(0.0, 1.0 - (dedup_diff / max(1, dedup_target)))
-        return {"date_parse_accuracy": date_acc, "duplicate_quality": dedup_score}
+        res = {"date_parse_accuracy": date_acc, "duplicate_quality": dedup_score}
+        return {k: float(max(0.001, min(0.999, v))) for k, v in res.items()}
 
     if task_id == "task_medium":
         null_fill = 1.0 - float(current["city"].isna().mean())
@@ -303,7 +304,8 @@ def grade_task(task_id: str, current: pd.DataFrame, bundle: TaskBundle) -> Dict[
         standard_acc = float(canonical.mean())
         zip_ok = current["zip_code"].astype(str).str.match(r"^\d{5}$").fillna(False)
         schema_score = float(((~current["city"].isna()) & canonical & zip_ok).mean())
-        return {"null_fill_rate": null_fill, "standardization_accuracy": standard_acc, "schema_compliance": schema_score}
+        res = {"null_fill_rate": null_fill, "standardization_accuracy": standard_acc, "schema_compliance": schema_score}
+        return {k: float(max(0.001, min(0.999, v))) for k, v in res.items()}
 
     if task_id == "task_hard":
         # Fuzzy dedup proxy: rows with same DOB and high name similarity should collapse.
@@ -321,10 +323,11 @@ def grade_task(task_id: str, current: pd.DataFrame, bundle: TaskBundle) -> Dict[
         age_ok = float(((current["age"] >= 18) & (current["age"] <= 90)).mean())
         false_del = max(0, len(bundle.valid_row_ids) - len(set(current["row_id"]).intersection(bundle.valid_row_ids)))
         deletion_safety = max(0.0, 1.0 - (false_del / max(1, len(bundle.valid_row_ids))))
-        return {
+        res = {
             "fuzzy_dedup_f1": dedup_f1,
             "numeric_fix_accuracy": salary_fix,
             "outlier_removal_quality": age_ok,
             "zero_false_deletion_score": deletion_safety,
         }
+        return {k: float(max(0.001, min(0.999, v))) for k, v in res.items()}
     raise ValueError(f"Unknown task_id: {task_id}")
