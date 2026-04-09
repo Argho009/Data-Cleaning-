@@ -1056,7 +1056,7 @@ def main() -> None:
     # Use server.app:app since it's now in the server folder, wait, 
     # if python runs `python server/app.py`, the module name might be `__main__`.
     # Let's just use `uvicorn.run("server.app:app", ...)` assuming it runs from root.
-    uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
+    uvicorn.run("app:app", host="0.0.0.0", port=7860)
 
 
 if __name__ == "__main__":
