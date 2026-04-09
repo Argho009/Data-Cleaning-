@@ -127,7 +127,7 @@ def run_task(
                 time.sleep(2)
                 
         if r is None:
-            return 0.0
+            return 0.001
 
         observation = r.json()
         done = False
@@ -157,7 +157,7 @@ def run_task(
         return final_score
     except Exception as e:
         print(f"[ERROR] Exception during task_id={task_id}: {e}")
-        return 0.0
+        return 0.001
 
 
 def main() -> int:
