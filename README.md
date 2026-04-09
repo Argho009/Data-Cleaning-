@@ -6,7 +6,7 @@ colorTo: blue
 sdk: docker
 sdk_version: "latest"
 python_version: "3.12"
-app_file: app.py
+app_file: server/app.py
 pinned: false
 tags:
   - openenv
