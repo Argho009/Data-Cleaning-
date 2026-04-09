@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field, field_validator
 from tasks import TaskBundle, build_task, detect_errors, grade_task
 
 
+def _cb(v: float) -> float:
+    """Clamp to strictly open interval (0, 1) as required by OpenEnv validator."""
+    return float(max(0.001, min(0.999, v)))
+
+
 AVAILABLE_ACTIONS = [
     "fix_dates",
     "remove_duplicates",
@@ -255,23 +260,24 @@ class DataCleaningEnv:
                 0.15 * metrics["zero_false_deletion_score"]
             )
 
-        valid_rows_preserved = 0.0
+        valid_rows_preserved = 0.001
         if "row_id" in self.current_df.columns:
             curr = set(self.current_df["row_id"]).intersection(self.task.valid_row_ids)
-            valid_rows_preserved = len(curr) / max(1, len(self.task.valid_row_ids))
-        schema_compliance = metrics.get("schema_compliance", min(1.0, task_grade))
-        steps_bonus = 1.0 if self.step_count < (self.max_steps / 2) else max(0.0, 1.0 - (self.step_count / self.max_steps))
+            valid_rows_preserved = _cb(len(curr) / max(1, len(self.task.valid_row_ids)))
+        schema_compliance = _cb(metrics.get("schema_compliance", min(0.999, task_grade)))
+        raw_bonus = 0.999 if self.step_count < (self.max_steps / 2) else max(0.001, 1.0 - (self.step_count / self.max_steps))
+        steps_bonus = _cb(raw_bonus)
+        errors_score_c = _cb(errors_score)
 
-        final = (
-            0.40 * errors_score +
+        final = _cb(
+            0.40 * errors_score_c +
             0.30 * schema_compliance +
             0.20 * valid_rows_preserved +
             0.10 * steps_bonus
         )
-        final = float(max(0.001, min(0.999, final)))
         breakdown = {
-            "task_grade": round(task_grade, 4),
-            "errors_fixed_ratio": round(errors_score, 4),
+            "task_grade": round(_cb(task_grade), 4),
+            "errors_fixed_ratio": round(errors_score_c, 4),
             "schema_compliance_score": round(schema_compliance, 4),
             "valid_rows_preserved": round(valid_rows_preserved, 4),
             "steps_efficiency_bonus": round(steps_bonus, 4),
@@ -289,7 +295,7 @@ class DataCleaningEnv:
         self.step_count += 1
         changed, valid_deleted, msg = self._apply_action(action)
         step_hint = 0.0
-        breakdown: Dict[str, float] = {"step_delta": 0.0}
+        breakdown: Dict[str, float] = {"step_delta": 0.001}
 
         correct_by_task = {
             "task_easy": {"fix_dates", "remove_duplicates", "inspect", "submit"},
@@ -305,11 +311,11 @@ class DataCleaningEnv:
 
         assert self.task is not None
         remaining_errs = len(detect_errors(self.task.task_id, self.current_df))
-        progress_ratio = float(max(0.0, min(1.0, 1.0 - (remaining_errs / max(1, self.total_errors_at_start)))))
-        fraction_errors_fixed = float(
-            max(0.0, min(1.0, (self.total_errors_at_start - remaining_errs) / max(1, self.total_errors_at_start)))
+        progress_ratio = _cb(1.0 - (remaining_errs / max(1, self.total_errors_at_start)))
+        fraction_errors_fixed = _cb(
+            (self.total_errors_at_start - remaining_errs) / max(1, self.total_errors_at_start)
         )
-        step_budget_ratio = max(0.0, 1.0 - (self.step_count / max(1, self.max_steps)))
+        step_budget_ratio = _cb(1.0 - (self.step_count / max(1, self.max_steps)))
 
         done = action.action_type == "submit" or self.step_count >= self.max_steps
         if done:
@@ -329,7 +335,7 @@ class DataCleaningEnv:
             score = float(max(0.001, min(0.999, intermediate)))
             breakdown.update(
                 {
-                    "step_delta": round(step_hint, 4),
+                    "step_delta": round(_cb(step_hint) if step_hint != 0.0 else 0.001, 4),
                     "fraction_errors_fixed": round(fraction_errors_fixed, 4),
                     "progress_ratio": round(progress_ratio, 4),
                     "step_budget_ratio": round(step_budget_ratio, 4),
@@ -337,6 +343,8 @@ class DataCleaningEnv:
             )
             message = msg
 
+        # Clamp ALL breakdown values — validator checks every numeric in API response
+        breakdown = {k: round(_cb(v), 4) for k, v in breakdown.items()}
         reward = Reward(score=round(score, 4), breakdown=breakdown, message=message, done=done)
         obs = self._observation()
         info = {"valid_rows_deleted": valid_deleted}
