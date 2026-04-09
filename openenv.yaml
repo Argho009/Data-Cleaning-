@@ -1,0 +1,123 @@
+# OpenEnv metadata — Data Cleaning Agent (tabular data quality)
+# https://github.com/meta-pytorch/OpenEnv
+
+id: data-cleaning-agent
+name: Data Cleaning Agent
+version: "1.0.0"
+license: MIT
+description: >
+  Real-world tabular data quality environment: an agent applies discrete cleaning
+  actions (dates, dedup, imputation, standardization, outliers) on synthetic but
+  realistic dirty datasets and is graded on error reduction, schema compliance,
+  and safe row preservation.
+
+authors:
+  - name: Community
+    url: https://huggingface.co/
+
+tags:
+  - data-quality
+  - tabular
+  - pandas
+  - enterprise
+  - openenv
+
+entry_point: environment:DataCleaningEnv
+
+api:
+  reset: POST /reset
+  step: POST /step
+  state: GET /state
+  health: GET /health
+
+observation_space:
+  type: object
+  fields:
+    task_id: { type: string }
+    description: { type: string }
+    current_data: { type: string, format: json_records, description: "Active table as JSON array of row objects" }
+    target_schema: { type: object, description: "Column name -> expected dtype or format hint" }
+    error_report: { type: array, items: { type: string } }
+    errors_remaining: { type: integer }
+    errors_initial: { type: integer }
+    available_actions: { type: array, items: { type: string } }
+    step_count: { type: integer }
+    max_steps: { type: integer }
+
+action_space:
+  type: object
+  fields:
+    action_type:
+      type: string
+      enum:
+        - fix_dates
+        - remove_duplicates
+        - fill_nulls
+        - standardize
+        - fix_numeric
+        - detect_fuzzy_duplicates
+        - remove_outliers
+        - inspect
+        - submit
+    parameters:
+      type: object
+      description: "Optional action-specific kwargs (columns, strategy, subset, mapping, etc.)"
+
+state_space:
+  type: object
+  model: EnvState
+  fields:
+    ready: { type: boolean }
+    task_id: { type: string, nullable: true }
+    seed: { type: integer, nullable: true }
+    step_count: { type: integer }
+    max_steps: { type: integer }
+    done: { type: boolean }
+    rows: { type: integer }
+    errors: { type: array, items: { type: string } }
+    errors_remaining: { type: integer }
+    errors_initial: { type: integer }
+    progress_ratio: { type: number, minimum: 0.0, maximum: 1.0 }
+
+reward_range: [0.0, 1.0]
+
+reward_components:
+  - name: intermediate_signal
+    description: >
+      During an episode, reward blends error-fix progress, remaining-error ratio,
+      action hints, and step-budget pressure (all in [0,1]).
+  - name: terminal_signal
+    description: >
+      On submit or max_steps, final score weights automated checks (task_grade,
+      errors_fixed_ratio, schema compliance, valid row preservation, step efficiency).
+
+termination_conditions:
+  - action_type == submit
+  - step_count >= max_steps
+
+max_steps: 15
+
+scenarios:
+  - id: task_easy
+    difficulty: easy
+    summary: "Normalize mixed sale_date formats and remove exact duplicate sale rows."
+    grader_metrics:
+      - date_parse_accuracy
+      - duplicate_quality
+  - id: task_medium
+    difficulty: medium
+    summary: "Impute missing city/zip and canonicalize US state labels."
+    grader_metrics:
+      - null_fill_rate
+      - standardization_accuracy
+      - schema_compliance
+  - id: task_hard
+    difficulty: hard
+    summary: "Fuzzy dedup on names, fix corrupted salaries, format phones, clip age outliers."
+    grader_metrics:
+      - fuzzy_dedup_f1
+      - numeric_fix_accuracy
+      - outlier_removal_quality
+      - zero_false_deletion_score
+
+tasks: [task_easy, task_medium, task_hard]
