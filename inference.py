@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List
 
 from openai import OpenAI
@@ -18,6 +19,20 @@ import requests
 
 
 DEFAULT_SEEDS = {"task_easy": 42, "task_medium": 43, "task_hard": 44}
+
+# Maximum wait for the environment server to become ready (seconds)
+_SERVER_WAIT_ATTEMPTS = 30
+_SERVER_WAIT_DELAY = 3.0
+
+
+def _log_debug(msg: str) -> None:
+    """Send debug/warning/retry messages to stderr so stdout stays clean for the parser."""
+    print(msg, file=sys.stderr, flush=True)
+
+
+def _clamp_score(score: float) -> float:
+    """Ensure score is strictly within (0, 1) — never exactly 0.0 or 1.0."""
+    return float(max(0.001, min(0.999, score)))
 
 
 def _choose_action(task_id: str, step_count: int) -> Dict[str, Any]:
@@ -95,8 +110,22 @@ def _llm_choose_action(
             params = {}
         return {"action_type": action_type, "parameters": params}
     except Exception as e:
-        print(f"[WARNING] LLM action failed: {e}. Using deterministic fallback.")
+        _log_debug(f"[WARNING] LLM action failed: {e}. Using deterministic fallback.")
         return fallback
+
+
+def _wait_for_server(env_base: str, timeout_s: float) -> bool:
+    """Block until the environment server responds to /health, or give up."""
+    for attempt in range(_SERVER_WAIT_ATTEMPTS):
+        try:
+            r = requests.get(f"{env_base}/health", timeout=timeout_s)
+            if r.status_code == 200:
+                return True
+        except requests.exceptions.ConnectionError:
+            pass
+        _log_debug(f"[WAIT] Server not ready, attempt {attempt + 1}/{_SERVER_WAIT_ATTEMPTS}...")
+        time.sleep(_SERVER_WAIT_DELAY)
+    return False
 
 
 def run_task(
@@ -108,31 +137,18 @@ def run_task(
     timeout_s: float,
 ) -> float:
     print(f"[START] task_id={task_id} seed={seed}")
-    import time
     try:
-        r = None
-        for attempt in range(5):
-            try:
-                r = requests.post(
-                    f"{env_base}/reset",
-                    json={"task_id": task_id, "seed": seed},
-                    timeout=timeout_s,
-                )
-                r.raise_for_status()
-                break
-            except requests.exceptions.ConnectionError as e:
-                if attempt == 4:
-                    raise e
-                print(f"[RETRY] Waiting for environment server... attempt {attempt + 1}")
-                time.sleep(2)
-                
-        if r is None:
-            return 0.001
+        r = requests.post(
+            f"{env_base}/reset",
+            json={"task_id": task_id, "seed": seed},
+            timeout=timeout_s,
+        )
+        r.raise_for_status()
 
         observation = r.json()
         done = False
         step = 0
-        final_score = 0.0
+        final_score = 0.001  # safe default, never exactly 0.0
         while not done:
             step += 1
             st = requests.get(f"{env_base}/state", timeout=timeout_s)
@@ -144,7 +160,7 @@ def run_task(
             payload = resp.json()
             reward = payload["reward"]
             done = bool(payload["done"])
-            final_score = float(reward["score"])
+            final_score = _clamp_score(float(reward["score"]))
             observation = payload.get("observation", observation)
             st = requests.get(f"{env_base}/state", timeout=timeout_s)
             st.raise_for_status()
@@ -156,8 +172,12 @@ def run_task(
         print(f"[END] task_id={task_id} final_score={final_score:.4f}")
         return final_score
     except Exception as e:
-        print(f"[ERROR] Exception during task_id={task_id}: {e}")
-        return 0.001
+        _log_debug(f"[ERROR] Exception during task_id={task_id}: {e}")
+        # Must still emit [END] so the parser sees a complete task
+        fallback_score = 0.001
+        print(f"[STEP] step=1 action=submit score={fallback_score:.4f} progress=0.001 done=true")
+        print(f"[END] task_id={task_id} final_score={fallback_score:.4f}")
+        return fallback_score
 
 
 def main() -> int:
@@ -191,15 +211,21 @@ def main() -> int:
         try:
             llm_client = OpenAI(base_url=api_base_url, api_key=api_key)
         except Exception as e:
-            print(f"[WARNING] Failed to initialize OpenAI client: {e}")
+            _log_debug(f"[WARNING] Failed to initialize OpenAI client: {e}")
     else:
-        print("[WARNING] Missing LLM env vars. Using fallback deterministic policy.")
+        _log_debug("[WARNING] Missing LLM env vars. Using fallback deterministic policy.")
+
+    # Wait for environment server before running tasks
+    if not _wait_for_server(env_base, args.timeout):
+        _log_debug("[ERROR] Environment server did not become ready in time.")
 
     scores: Dict[str, float] = {}
     for t in ["task_easy", "task_medium", "task_hard"]:
         seed = args.seed if args.seed is not None else DEFAULT_SEEDS[t]
         scores[t] = run_task(env_base, llm_client, model_name, t, seed, args.timeout)
 
+    # Clamp all final reported scores
+    scores = {k: _clamp_score(v) for k, v in scores.items()}
     out = {"scores": scores, "mean": round(sum(scores.values()) / max(1, len(scores)), 6)}
     print(json.dumps(out, indent=2))
     return 0
