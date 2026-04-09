@@ -262,7 +262,7 @@ class DataCleaningEnv:
             0.20 * valid_rows_preserved +
             0.10 * steps_bonus
         )
-        final = float(max(0.0, min(1.0, final)))
+        final = float(max(0.001, min(0.999, final)))
         breakdown = {
             "task_grade": round(task_grade, 4),
             "errors_fixed_ratio": round(errors_score, 4),
@@ -320,7 +320,7 @@ class DataCleaningEnv:
                 + 0.12 * max(0.0, step_hint)
                 + 0.08 * step_budget_ratio
             )
-            score = float(max(0.0, min(1.0, intermediate)))
+            score = float(max(0.001, min(0.999, intermediate)))
             breakdown.update(
                 {
                     "step_delta": round(step_hint, 4),
