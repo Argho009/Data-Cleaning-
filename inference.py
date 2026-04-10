@@ -3,6 +3,11 @@ OpenAI-client baseline policy for reproducible benchmark scores.
 
 Runs the HTTP OpenEnv API: POST /reset, POST /step, GET /state.
 LLM calls are made through the OpenAI client with API_BASE_URL/MODEL_NAME.
+
+STDOUT FORMAT (strictly required by validator):
+  [START] task=<task_name> env=<benchmark> model=<model_name>
+  [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+  [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
 from __future__ import annotations
@@ -12,15 +17,15 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 import requests
 
 
 DEFAULT_SEEDS = {"task_easy": 42, "task_medium": 43, "task_hard": 44}
+ENV_NAME = "data-cleaning-agent"
 
-# Maximum wait for the environment server to become ready (seconds)
 _SERVER_WAIT_ATTEMPTS = 30
 _SERVER_WAIT_DELAY = 3.0
 
@@ -71,7 +76,6 @@ def _llm_choose_action(
     observation: Dict[str, Any],
     state: Dict[str, Any],
 ) -> Dict[str, Any]:
-    # Keep a deterministic fallback to preserve reproducibility.
     fallback = _choose_action(task_id, step_count)
     if client is None:
         return fallback
@@ -115,7 +119,6 @@ def _llm_choose_action(
 
 
 def _wait_for_server(env_base: str, timeout_s: float) -> bool:
-    """Block until the environment server responds to /health, or give up."""
     for attempt in range(_SERVER_WAIT_ATTEMPTS):
         try:
             r = requests.get(f"{env_base}/health", timeout=timeout_s)
@@ -136,7 +139,15 @@ def run_task(
     seed: int,
     timeout_s: float,
 ) -> float:
-    print(f"[START] task_id={task_id} seed={seed}")
+    # --- [START] line in required format ---
+    print(f"[START] task={task_id} env={ENV_NAME} model={model_name}", flush=True)
+
+    step = 0
+    rewards: List[float] = []
+    final_score = 0.001
+    success = False
+    last_error: Optional[str] = None
+
     try:
         r = requests.post(
             f"{env_base}/reset",
@@ -144,55 +155,81 @@ def run_task(
             timeout=timeout_s,
         )
         r.raise_for_status()
-
         observation = r.json()
         done = False
-        step = 0
-        final_score = 0.001  # safe default, never exactly 0.0
+
         while not done:
             step += 1
             st = requests.get(f"{env_base}/state", timeout=timeout_s)
             st.raise_for_status()
             state_payload = st.json()
-            action = _llm_choose_action(llm_client, model_name, task_id, step, observation, state_payload)
+
+            action = _llm_choose_action(
+                llm_client, model_name, task_id, step, observation, state_payload
+            )
+
             resp = requests.post(f"{env_base}/step", json=action, timeout=timeout_s)
             resp.raise_for_status()
             payload = resp.json()
-            reward = payload["reward"]
+
+            reward_val = _clamp_score(float(payload["reward"]["score"]))
             done = bool(payload["done"])
-            final_score = _clamp_score(float(reward["score"]))
+            last_error = None  # clear on success
             observation = payload.get("observation", observation)
-            st = requests.get(f"{env_base}/state", timeout=timeout_s)
-            st.raise_for_status()
-            prog_raw = st.json().get("progress_ratio", 0.001)
-            prog = _clamp_score(float(prog_raw)) if prog_raw is not None else 0.001
+            rewards.append(reward_val)
+
+            # --- [STEP] line in required format ---
             print(
                 f"[STEP] step={step} action={action['action_type']} "
-                f"score={final_score:.4f} progress={prog:.4f} done={str(done).lower()}"
+                f"reward={reward_val:.2f} done={'true' if done else 'false'} "
+                f"error=null",
+                flush=True,
             )
-        print(f"[END] task_id={task_id} final_score={final_score:.4f}")
-        return final_score
+
+        final_score = _clamp_score(rewards[-1]) if rewards else 0.001
+        success = True
+
     except Exception as e:
+        last_error = str(e)
         _log_debug(f"[ERROR] Exception during task_id={task_id}: {e}")
-        # Must still emit [END] so the parser sees a complete task
-        fallback_score = 0.001
-        print(f"[STEP] step=1 action=submit score={fallback_score:.4f} progress=0.001 done=true")
-        print(f"[END] task_id={task_id} final_score={fallback_score:.4f}")
-        return fallback_score
+        # Emit a fallback step so parser sees at least one [STEP]
+        fallback_reward = 0.001
+        rewards.append(fallback_reward)
+        step = max(step, 1)
+        print(
+            f"[STEP] step={step} action=submit reward={fallback_reward:.2f} "
+            f"done=true error={last_error}",
+            flush=True,
+        )
+        final_score = 0.001
+        success = False
+
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+
+    # --- [END] line in required format ---
+    print(
+        f"[END] success={'true' if success else 'false'} steps={step} "
+        f"score={final_score:.4f} rewards={rewards_str}",
+        flush=True,
+    )
+
+    return final_score
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="OpenAI-client baseline for Data Cleaning Agent OpenEnv.")
+    parser = argparse.ArgumentParser(
+        description="OpenAI-client baseline for Data Cleaning Agent OpenEnv."
+    )
     parser.add_argument(
         "--env-base",
         default=os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860"),
-        help="OpenEnv server base URL (env ENV_BASE_URL overrides default).",
+        help="OpenEnv server base URL.",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=None,
-        help="Override all task seeds (default: built-in per-task seeds for reproducibility).",
+        help="Override all task seeds.",
     )
     parser.add_argument(
         "--timeout",
@@ -205,8 +242,10 @@ def main() -> int:
 
     api_base_url = os.getenv("API_BASE_URL", "").strip()
     model_name = os.getenv("MODEL_NAME", "fallback-model").strip()
-    api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("HF_TOKEN", "").strip()
-    
+    api_key = (
+        os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("HF_TOKEN", "").strip()
+    )
+
     llm_client = None
     if api_base_url and model_name and api_key:
         try:
@@ -216,7 +255,6 @@ def main() -> int:
     else:
         _log_debug("[WARNING] Missing LLM env vars. Using fallback deterministic policy.")
 
-    # Wait for environment server before running tasks
     if not _wait_for_server(env_base, args.timeout):
         _log_debug("[ERROR] Environment server did not become ready in time.")
 
@@ -225,10 +263,11 @@ def main() -> int:
         seed = args.seed if args.seed is not None else DEFAULT_SEEDS[t]
         scores[t] = run_task(env_base, llm_client, model_name, t, seed, args.timeout)
 
-    # Clamp all final reported scores
+    # Clamp all final scores strictly within (0, 1)
     scores = {k: _clamp_score(v) for k, v in scores.items()}
-    out = {"scores": scores, "mean": round(sum(scores.values()) / max(1, len(scores)), 6)}
-    print(json.dumps(out, indent=2))
+    mean_score = _clamp_score(sum(scores.values()) / max(1, len(scores)))
+    out = {"scores": scores, "mean": round(mean_score, 6)}
+    print(json.dumps(out, indent=2), flush=True)
     return 0
 
 
