@@ -354,7 +354,7 @@ class DataCleaningEnv:
         if self.task is None or self.current_df is None:
             return 0.0
         remaining = len(detect_errors(self.task.task_id, self.current_df))
-        return float(max(0.0, min(1.0, 1.0 - (remaining / max(1, self.total_errors_at_start)))))
+        return float(max(0.001, min(0.999, 1.0 - (remaining / max(1, self.total_errors_at_start)))))
 
     def state(self) -> EnvState:
         if self.task is None or self.current_df is None:
