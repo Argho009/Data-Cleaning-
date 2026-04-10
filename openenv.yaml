@@ -1,6 +1,3 @@
-# OpenEnv metadata — Data Cleaning Agent (tabular data quality)
-# https://github.com/meta-pytorch/OpenEnv
-
 id: data-cleaning-agent
 name: Data Cleaning Agent
 version: "1.0.0"

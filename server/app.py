@@ -798,7 +798,7 @@ def _regression_scores(df: pd.DataFrame) -> List[Dict[str, Any]]:
             score += (complexity * 6.0) + (size_bonus * 5.0) + (cleanliness * 4.0)
         elif "SVR" in name:
             score += (numeric_ratio * 4.0) + (cleanliness * 5.0) - (complexity * 2.0)
-        else:  # MLP
+        else:
             score += (size_bonus * 6.0) + (complexity * 3.0) + (cleanliness * 2.0)
         score = max(55.0, min(97.0, score))
         scores.append({"technique": name, "fit_percent": round(score, 1)})
@@ -850,7 +850,6 @@ def _recommend_models(df: pd.DataFrame, target_column: str, objective: str) -> D
 
 
 def _cleaned_download_filename(original_file_name: str, output_ext: str) -> str:
-    """Build e.g. `sales (cleaned).csv` from uploaded `sales.csv`."""
     name = (original_file_name or "").strip() or "dataset"
     base = os.path.basename(name)
     stem, _ = os.path.splitext(base)
@@ -1053,9 +1052,6 @@ def ui_download(format: str = "csv") -> StreamingResponse:
 
 def main() -> None:
     import uvicorn
-    # Use server.app:app since it's now in the server folder, wait, 
-    # if python runs `python server/app.py`, the module name might be `__main__`.
-    # Let's just use `uvicorn.run("server.app:app", ...)` assuming it runs from root.
     uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
 
 

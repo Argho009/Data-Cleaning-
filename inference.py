@@ -1,15 +1,3 @@
-"""
-OpenAI-client baseline policy for reproducible benchmark scores.
-
-Runs the HTTP OpenEnv API: POST /reset, POST /step, GET /state.
-LLM calls are made through the OpenAI client with API_BASE_URL/MODEL_NAME.
-
-STDOUT FORMAT (strictly required by validator):
-  [START] task=<task_name> env=<benchmark> model=<model_name>
-  [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-  [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -31,12 +19,10 @@ _SERVER_WAIT_DELAY = 3.0
 
 
 def _log_debug(msg: str) -> None:
-    """Send debug/warning/retry messages to stderr so stdout stays clean for the parser."""
     print(msg, file=sys.stderr, flush=True)
 
 
 def _clamp_score(score: float) -> float:
-    """Ensure score is strictly within (0, 1) — never exactly 0.0 or 1.0."""
     return float(max(0.001, min(0.999, score)))
 
 
@@ -139,7 +125,6 @@ def run_task(
     seed: int,
     timeout_s: float,
 ) -> float:
-    # --- [START] line in required format ---
     print(f"[START] task={task_id} env={ENV_NAME} model={model_name}", flush=True)
 
     step = 0
@@ -174,11 +159,10 @@ def run_task(
 
             reward_val = _clamp_score(float(payload["reward"]["score"]))
             done = bool(payload["done"])
-            last_error = None  # clear on success
+            last_error = None
             observation = payload.get("observation", observation)
             rewards.append(reward_val)
 
-            # --- [STEP] line in required format ---
             print(
                 f"[STEP] step={step} action={action['action_type']} "
                 f"reward={reward_val:.2f} done={'true' if done else 'false'} "
@@ -192,7 +176,6 @@ def run_task(
     except Exception as e:
         last_error = str(e)
         _log_debug(f"[ERROR] Exception during task_id={task_id}: {e}")
-        # Emit a fallback step so parser sees at least one [STEP]
         fallback_reward = 0.001
         rewards.append(fallback_reward)
         step = max(step, 1)
@@ -206,7 +189,6 @@ def run_task(
 
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
 
-    # --- [END] line in required format ---
     print(
         f"[END] success={'true' if success else 'false'} steps={step} "
         f"score={final_score:.4f} rewards={rewards_str}",
@@ -263,7 +245,6 @@ def main() -> int:
         seed = args.seed if args.seed is not None else DEFAULT_SEEDS[t]
         scores[t] = run_task(env_base, llm_client, model_name, t, seed, args.timeout)
 
-    # Clamp all final scores strictly within (0, 1)
     scores = {k: _clamp_score(v) for k, v in scores.items()}
     mean_score = _clamp_score(sum(scores.values()) / max(1, len(scores)))
     out = {"scores": scores, "mean": round(mean_score, 6)}

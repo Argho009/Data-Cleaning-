@@ -308,7 +308,6 @@ def grade_task(task_id: str, current: pd.DataFrame, bundle: TaskBundle) -> Dict[
         return {k: float(max(0.001, min(0.999, v))) for k, v in res.items()}
 
     if task_id == "task_hard":
-        # Fuzzy dedup proxy: rows with same DOB and high name similarity should collapse.
         pairs = 0
         matched = 0
         rows = current[["employee_name", "dob"]].astype(str).to_dict("records")
